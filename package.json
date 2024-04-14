@@ -1,13 +1,12 @@
 {
-  "name": "io.github.jonasdem.entitiesselection",
+  "name": "io.github.jimchan.entitiesselection",
   "version": "1.2.0",
   "displayName": "Entities Selection",
-  "description": "Select your entities!\nFocus on the SceneView, point to the entity & press 1 (non-numpad).",
+  "description": "Runtime enetity selection.",
   "unity": "2022.3",
   "author": {
-    "name": "Jonas De Maeseneer",
-    "email": "jonas.de.maeseneer@outlook.com",
-    "url": "https://jonasdem.github.io/"
+    "name": "Jim Chan",
+    "email": "jamtype7@gmail.com"
   },
   "type": "tool",
   "hideInEditor": false

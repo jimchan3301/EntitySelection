@@ -1,4 +1,4 @@
-# EntitiesSelection
+# Entities Selection
 
 This is a fork of @JonasDeM's EntitySelection package.
 
@@ -33,7 +33,7 @@ Or manually add the dependency to the Packages/manifest.json file.
 ```
 {
     "dependencies": {
-        "io.github.jonasdem.entityselection": "https://github.com/JonasDeM/EntitySelection.git"
+        "io.github.jimchan.entitiesselection": "https://github.com/jimchan3301/EntitySelection.git"
     }
 }
 ```

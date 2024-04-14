@@ -1,24 +1,21 @@
-﻿﻿﻿// Author: Jonas De Maeseneer
+﻿﻿// Author: Jonas De Maeseneer
 
 using System;
 using System.Collections.Generic;
 using System.Reflection;
 using Unity.Entities;
-using Unity.Entities.Editor;
 using Unity.Rendering;
 using Unity.Transforms;
 using UnityEditor;
 using UnityEngine;
-using UnityEngine.EventSystems;
 using UnityEngine.Rendering;
 using Object = UnityEngine.Object;
-  
-[ExecuteAlways]
+
 [UpdateInGroup(typeof(PresentationSystemGroup))]
-public class EntitySelectionSystem : ComponentSystem
+public partial class EntitySelectionSystem : SystemBase
 {
     // Instance members
-    private RenderTexture _objectIDRenderTarget;
+    public RenderTexture _objectIDRenderTarget { get; private set; }
     private Shader _colorIDShader;
     private Texture2D _objectID1x1Texture;
 
@@ -27,7 +24,7 @@ public class EntitySelectionSystem : ComponentSystem
     private static readonly int ColorPropertyID = Shader.PropertyToID("_Color");
     private MaterialPropertyBlock _idMaterialPropertyBlock;
     private Material _idMaterial;
-    
+
     // cached reflection variable to find actual scene view camera rect
     private static readonly PropertyInfo _sceneViewCameraRectProp = typeof(SceneView).GetProperty("cameraRect", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
 
@@ -35,9 +32,8 @@ public class EntitySelectionSystem : ComponentSystem
     {
         _colorIDShader = Shader.Find("Unlit/EntityIdShader");
         _objectID1x1Texture = new Texture2D(1, 1, TextureFormat.RGBA32, false);
-        SceneView.duringSceneGui += UpdateView;
         _idMaterialPropertyBlock = new MaterialPropertyBlock();
-        
+
         // On first load of the package the shader can't be found, but OnClicked handles null materials
         if (_colorIDShader)
         {
@@ -45,17 +41,17 @@ public class EntitySelectionSystem : ComponentSystem
         }
     }
 
-    private void OnClicked(Vector2 mousePos, Camera camera, int renderTextureWidth, int renderTextureHeight)
+    private Entity OnClicked(Vector2 point, int renderTextureWidth, int renderTextureHeight, in Matrix4x4 viewMatrix, in Matrix4x4 projectionMatrix)
     {
         // Needs to happen when the scene changed
         if (_idMaterial == null)
         {
             OnCreate();
         }
-        
+
         // Initial creation + on window resize
         if (_objectIDRenderTarget == null ||
-            renderTextureWidth  != _objectIDRenderTarget.width ||
+            renderTextureWidth != _objectIDRenderTarget.width ||
             renderTextureHeight != _objectIDRenderTarget.height)
         {
             _objectIDRenderTarget = new RenderTexture(renderTextureWidth, renderTextureHeight, 0)
@@ -68,48 +64,50 @@ public class EntitySelectionSystem : ComponentSystem
         }
 
         // Rendering Unique color per entity
-        RenderEntityIDs(camera);
+        RenderEntityIDs(viewMatrix, projectionMatrix);
         // Getting the pixel at the mouse position and converting the color to an entity
-        SelectEntity(mousePos);
+        return SelectEntity(point);
     }
 
-    private void RenderEntityIDs(Camera camera)
+    private void RenderEntityIDs(Matrix4x4 viewMatrix, Matrix4x4 projectionMatrix)
     {
         var cmd = new CommandBuffer();
         cmd.SetRenderTarget(_objectIDRenderTarget);
-        cmd.ClearRenderTarget(true, true, new Color(0,0,0,0));
-        cmd.SetViewProjectionMatrices(camera.worldToCameraMatrix, camera.projectionMatrix);
-        Entities.ForEach((Entity e, RenderMesh mesh, ref LocalToWorld localToWorld) =>
+        cmd.ClearRenderTarget(true, true, new Color(0, 0, 0, 0));
+        cmd.SetViewProjectionMatrices(viewMatrix, projectionMatrix);
+        Entities.ForEach((Entity e, in RenderMeshArray meshes, in MaterialMeshInfo info, in LocalToWorld localToWorld) =>
         {
-            if (mesh.mesh == null)
+            var mesh = meshes.GetMesh(info);
+            if (mesh == null)
             {
                 return;
             }
             _entityIndexToVersion[e.Index] = e.Version;
             _idMaterialPropertyBlock.SetColor(ColorPropertyID, IndexToColor(e.Index));
-            cmd.DrawMesh(mesh.mesh, localToWorld.Value, _idMaterial, mesh.subMesh, 0, _idMaterialPropertyBlock);
-        });
+
+            cmd.DrawMesh(mesh, localToWorld.Value, _idMaterial, 0, 0, _idMaterialPropertyBlock);
+        })
+        // .ScheduleParallel();
+        .WithoutBurst()
+        .Run();
+
         Graphics.ExecuteCommandBuffer(cmd);
     }
 
-    private void SelectEntity(Vector2 mousePos)
+    private Entity SelectEntity(Vector2 point)
     {
         var selectedEntity = new Entity
         {
-            Index = ColorToIndex(GetColorAtMousePos(mousePos, _objectIDRenderTarget))
+            Index = ColorToIndex(GetColorAtPoint(point, _objectIDRenderTarget))
         };
         if (_entityIndexToVersion.ContainsKey(selectedEntity.Index))
         {
             selectedEntity.Version = _entityIndexToVersion[selectedEntity.Index];
-            EntitySelectionProxy.SelectEntity(World, selectedEntity);
         }
-        else
-        {
-            Selection.activeObject = null;
-        }
+        return selectedEntity;
     }
 
-    private Color GetColorAtMousePos(Vector2 posLocalToSceneView, RenderTexture objectIdTex)
+    private Color GetColorAtPoint(Vector2 posLocalToSceneView, RenderTexture objectIdTex)
     {
         RenderTexture.active = objectIdTex;
 
@@ -117,17 +115,17 @@ public class EntitySelectionSystem : ComponentSystem
         if (posLocalToSceneView.x < 0 || posLocalToSceneView.x > objectIdTex.width
             || posLocalToSceneView.y < 0 || posLocalToSceneView.y > objectIdTex.height)
         {
-            return new Color(0,0,0,0); // results in Entity.Null
+            return new Color(0, 0, 0, 0); // results in Entity.Null
         }
 
         // handles when the edges of the screen are clicked
         posLocalToSceneView.x = Mathf.Clamp(posLocalToSceneView.x, 0, objectIdTex.width - 1);
         posLocalToSceneView.y = Mathf.Clamp(posLocalToSceneView.y, 0, objectIdTex.height - 1);
-        
+
         _objectID1x1Texture.ReadPixels(new Rect(posLocalToSceneView.x, posLocalToSceneView.y, 1, 1), 0, 0, false);
         _objectID1x1Texture.Apply();
         RenderTexture.active = null;
-        
+
         return _objectID1x1Texture.GetPixel(0, 0);
     }
 
@@ -143,42 +141,53 @@ public class EntitySelectionSystem : ComponentSystem
         return BitConverter.ToInt32(bytes, 0);
     }
 
-    // Get input from the SceneView
-    private static void UpdateView(SceneView sceneView)
+    /// <summary>
+    /// Get the entity at a specific point.
+    /// </summary>
+    /// <param name="world"> The world to use for the selection. </param>
+    /// <param name="point"> The point in screen space. </param>
+    /// <param name="renderTextureWidth"> The width of the render texture. </param>
+    /// <param name="renderTextureHeight"> The height of the render texture. </param>
+    /// <param name="viewMatrix"> The view matrix of the camera. </param>
+    /// <param name="projectionMatrix"> The projection matrix of the camera. </param>
+    /// <example>
+    /// <code>
+    /// var entity = EntitySelectionSystem.GetEntityAtPoint(
+    ///     World.DefaultGameObjectInjectionWorld,
+    ///     new Vector2(Input.mousePosition.x, Input.mousePosition.y),
+    ///     Camera.main.pixelWidth, Camera.main.pixelHeight,
+    ///     Camera.main.worldToCameraMatrix, Camera.main.projectionMatrix
+    /// );
+    /// </code>
+    /// </example>
+    /// <returns> The entity at the point, or Entity.Null if no entity was found. </returns>
+    public static Entity GetEntityAtPoint(World world, Vector2 point, int renderTextureWidth, int renderTextureHeight, in Matrix4x4 viewMatrix, in Matrix4x4 projectionMatrix)
     {
-        if (Event.current != null)
-        {
-            if (Event.current.keyCode == KeyCode.Alpha1 && Event.current.type == EventType.KeyDown)
-            {
-                foreach (var world in World.All)
-                {
-                    var system = world.GetExistingSystem<EntitySelectionSystem>();
-
-                    Rect cameraRect;
-                    try
-                    {
-                        cameraRect = (Rect) _sceneViewCameraRectProp.GetValue(sceneView);
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogWarning($"EntitySelectionSystem couldn't determine camera rect of scene view. Using fallback rect. \n {e}");
-                        cameraRect = sceneView.position;
-                    }
-                    
-                    system?.OnClicked(Event.current.mousePosition, sceneView.camera, (int) cameraRect.width, (int) cameraRect.height);
-                }
-            }
-        }
+        var system = world.GetExistingSystemManaged<EntitySelectionSystem>();
+        return system?.OnClicked(point, renderTextureWidth, renderTextureHeight, viewMatrix, projectionMatrix) ?? Entity.Null;
+    }
+    /// <summary>
+    /// Get the entity at a specific point.
+    /// </summary>
+    /// <param name="point"> The point in screen space. </param>
+    /// <param name="camera"> The camera to use for the selection. </param>
+    /// <example>
+    /// <code>
+    /// var entity = EntitySelectionSystem.GetEntityAtPoint(new Vector2(Input.mousePosition.x, Input.mousePosition.y), Camera.main);
+    /// </code>
+    /// <returns> The entity at the point, or Entity.Null if no entity was found. </returns>
+    public static Entity GetEntityAtPoint(Vector2 point, Camera camera)
+    {
+        return GetEntityAtPoint(World.DefaultGameObjectInjectionWorld, point, camera.scaledPixelWidth, camera.scaledPixelHeight, camera.worldToCameraMatrix, camera.projectionMatrix);
     }
 
     protected override void OnDestroy()
     {
-        Object.DestroyImmediate(_idMaterial);
-        Object.DestroyImmediate(_objectID1x1Texture);
+        Object.Destroy(_idMaterial);
+        Object.Destroy(_objectID1x1Texture);
     }
 
     protected override void OnUpdate()
     {
-        // Everything happens in OnClicked which is called on an editor event
     }
 }

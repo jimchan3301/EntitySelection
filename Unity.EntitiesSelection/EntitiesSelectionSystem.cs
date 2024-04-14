@@ -2,11 +2,9 @@
 
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using Unity.Entities;
 using Unity.Rendering;
 using Unity.Transforms;
-using UnityEditor;
 using UnityEngine;
 using UnityEngine.Rendering;
 using Object = UnityEngine.Object;
@@ -24,9 +22,6 @@ public partial class EntitySelectionSystem : SystemBase
     private static readonly int ColorPropertyID = Shader.PropertyToID("_Color");
     private MaterialPropertyBlock _idMaterialPropertyBlock;
     private Material _idMaterial;
-
-    // cached reflection variable to find actual scene view camera rect
-    private static readonly PropertyInfo _sceneViewCameraRectProp = typeof(SceneView).GetProperty("cameraRect", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
 
     protected override void OnCreate()
     {
